@@ -92,7 +92,7 @@ public class Compressor {
     public long maxTimestamp;
 
     public Compressor(ByteBuffer buffer, CompressionType type) {
-        this.type = type;
+        this.type = type; // 从 KafkaProducer传递过来的压缩类型
         this.initPos = buffer.position();
 
         this.numRecords = 0;
@@ -108,6 +108,7 @@ public class Compressor {
 
         // create the stream
         bufferStream = new ByteBufferOutputStream(buffer);
+        // 下面根据压缩类型创建合适的压缩流
         appendStream = wrapForOutput(bufferStream, type, COMPRESSION_DEFAULT_BUFFER_SIZE);
     }
 
@@ -244,7 +245,7 @@ public class Compressor {
 
     public static DataOutputStream wrapForOutput(ByteBufferOutputStream buffer, CompressionType type, int bufferSize) {
         try {
-            switch (type) {
+            switch (type) { //根据不同的类型选择创建不同的压缩流
                 case NONE:
                     return new DataOutputStream(buffer);
                 case GZIP:

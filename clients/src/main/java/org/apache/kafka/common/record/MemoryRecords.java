@@ -38,9 +38,11 @@ public class MemoryRecords implements Records {
     // the capacity of the initial buffer, which is only used for de-allocation of writable records
     private final int initialCapacity;
 
+    //保存消息数据
     // the underlying buffer used for read; while the records are still writable it is null
     private ByteBuffer buffer;
 
+    //此MemoryRecords对象是只读模式，还是可写模式。
     // indicate if the memory records is writable or not (i.e. used for appends or read-only)
     private boolean writable;
 

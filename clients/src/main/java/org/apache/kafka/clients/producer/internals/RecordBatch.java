@@ -33,19 +33,19 @@ public final class RecordBatch {
 
     private static final Logger log = LoggerFactory.getLogger(RecordBatch.class);
 
-    public int recordCount = 0;
-    public int maxRecordSize = 0;
-    public volatile int attempts = 0;
+    public int recordCount = 0; //记录了保存的Record的个数
+    public int maxRecordSize = 0; //最大的Record的字节数
+    public volatile int attempts = 0; //尝试发送当前RecordBatch的次数
     public final long createdMs;
     public long drainedMs;
-    public long lastAttemptMs;
-    public final MemoryRecords records;
-    public final TopicPartition topicPartition;
-    public final ProduceRequestResult produceFuture;
-    public long lastAppendTime;
-    private final List<Thunk> thunks;
-    private long offsetCounter = 0L;
-    private boolean retry;
+    public long lastAttemptMs; //最后一次尝试发送的时间戳
+    public final MemoryRecords records; //指定用来存储数据的MemoryRecords对象
+    public final TopicPartition topicPartition; //当前RecordBatch中缓存的消息都会发送给此TopicPartition
+    public final ProduceRequestResult produceFuture; //标识RecordBatch状态的Future对象
+    public long lastAppendTime; //最后一次向RecordBatch追加消息的时间戳
+    private final List<Thunk> thunks; // Thunk对象集合 消息的回调对象队列
+    private long offsetCounter = 0L; // 用来记录某消息在RecordBatch中的偏移量。
+    private boolean retry; //是否正在重试。
 
     public RecordBatch(TopicPartition tp, MemoryRecords records, long now) {
         this.createdMs = now;
@@ -119,7 +119,7 @@ public final class RecordBatch {
      * A callback and the associated FutureRecordMetadata argument to pass to it.
      */
     final private static class Thunk {
-        final Callback callback;
+        final Callback callback; //对象消息的Callback对象
         final FutureRecordMetadata future;
 
         public Thunk(Callback callback, FutureRecordMetadata future) {

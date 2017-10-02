@@ -430,7 +430,7 @@ public final class RecordAccumulator {
             return previous;
     }
 
-    /**
+    /**  丢弃
      * Deallocate the record batch
      */
     public void deallocate(RecordBatch batch) {
@@ -499,6 +499,7 @@ public final class RecordAccumulator {
 
     /**
      * Go through incomplete batches and abort them.
+     * 生产者关闭时丢弃
      */
     private void abortBatches() {
         for (RecordBatch batch : incomplete.all()) {

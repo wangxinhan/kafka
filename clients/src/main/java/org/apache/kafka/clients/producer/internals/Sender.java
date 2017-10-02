@@ -309,6 +309,7 @@ public class Sender implements Runnable {
             else
                 exception = error.exception();
             // tell the user the result of their request
+            // 收到服务端发送回的正常响应
             batch.done(baseOffset, timestamp, exception);
             this.accumulator.deallocate(batch);
             if (error != Errors.NONE)

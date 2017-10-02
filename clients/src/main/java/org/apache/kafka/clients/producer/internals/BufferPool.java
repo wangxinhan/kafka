@@ -40,15 +40,17 @@ import org.apache.kafka.common.utils.Time;
  * prevents starvation or deadlock when a thread asks for a large chunk of memory and needs to block until multiple
  * buffers are deallocated.
  * </ol>
+ *
+ *  ByteBuffer的创建和释放是比较消耗资源的，为了实现内存的高效利用，kafka客户端使用BufferPool来实现ByteBuffer的复用。
  */
 public final class BufferPool {
 
-    private final long totalMemory;
+    private final long totalMemory; //记录了整个Pool的大小
     private final int poolableSize;
-    private final ReentrantLock lock;
-    private final Deque<ByteBuffer> free;
-    private final Deque<Condition> waiters;
-    private long availableMemory;
+    private final ReentrantLock lock; //因为有多线程并发分配和回收ByteBuffer，所以使用锁控制并发，保证线程安全。
+    private final Deque<ByteBuffer> free; //缓存了指定大小的ByteBuffer对象
+    private final Deque<Condition> waiters; //记录因申请不到足够空间而阻塞的线程，次队列中实际记录的是阻塞线程对应的Condition对象。
+    private long availableMemory; //记录了可用的空间大小，这个空间是 totalMemory - free列表中全部ByteBuffer的大小
     private final Metrics metrics;
     private final Time time;
     private final Sensor waitTime;
@@ -88,6 +90,8 @@ public final class BufferPool {
      * @throws InterruptedException If the thread is interrupted while blocked
      * @throws IllegalArgumentException if size is larger than the total memory controlled by the pool (and hence we would block
      *         forever)
+     *
+     *     从缓存池中申请ByteBuffer,当线程池中空间不足时，就会阻塞调用线程。
      */
     public ByteBuffer allocate(int size, long maxTimeToBlockMs) throws InterruptedException {
         if (size > this.totalMemory)
@@ -96,23 +100,29 @@ public final class BufferPool {
                                                + this.totalMemory
                                                + " on memory allocations.");
 
-        this.lock.lock();
+        this.lock.lock(); //加锁同步
         try {
+            // 请求的是poolableSize指定大小的ByteBuffer，且free中有空闲的ByteBuffer
             // check if we have a free buffer of the right size pooled
             if (size == poolableSize && !this.free.isEmpty())
-                return this.free.pollFirst();
+                return this.free.pollFirst(); //返回适合的ByteBuffer
 
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
+            // 当申请的空间大小不是poolableSize，则执行下面的处理
+            // free队列中都是poolableSize大小的ByteBuffer，可以直接计算整个free队列的空间
             int freeListSize = this.free.size() * this.poolableSize;
             if (this.availableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request
+                // 为了让 availableMemory > size freeUp() 方法会从free队列中不断释放
+                // ByttBuffer,直到availableMemory 满足这次申请
                 freeUp(size);
-                this.availableMemory -= size;
-                lock.unlock();
+                this.availableMemory -= size; //减小availableMemory
+                lock.unlock(); //解锁
+                // 这里并没有使用free队列中的buffer，而是直接分配size大小的HeapByteBuffer
                 return ByteBuffer.allocate(size);
-            } else {
+            } else { //没有足够的空间，只能阻塞了
                 // we are out of memory and will have to block
                 int accumulated = 0;
                 ByteBuffer buffer = null;

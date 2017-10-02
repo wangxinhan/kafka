@@ -64,19 +64,23 @@ public final class RecordBatch {
      * @return The RecordSend corresponding to this record or null if there isn't sufficient room.
      */
     public FutureRecordMetadata tryAppend(long timestamp, byte[] key, byte[] value, Callback callback, long now) {
+        //估算的剩余空间不足，不是准确值
         if (!this.records.hasRoomFor(key, value)) {
             return null;
         } else {
+            //向MemoryRecords中添加数据，注意，offsetCounter是在RecordBatch中的偏移量
             long checksum = this.records.append(offsetCounter++, timestamp, key, value);
             this.maxRecordSize = Math.max(this.maxRecordSize, Record.recordSize(key, value));
             this.lastAppendTime = now;
+            //创建FutureMetadata对象
             FutureRecordMetadata future = new FutureRecordMetadata(this.produceFuture, this.recordCount,
                                                                    timestamp, checksum,
                                                                    key == null ? -1 : key.length,
                                                                    value == null ? -1 : value.length);
+            //将用户自定义Callback 和 FutureRecordMetadata 封装成 Tunk，保存到thunks集合中
             if (callback != null)
                 thunks.add(new Thunk(callback, future));
-            this.recordCount++;
+            this.recordCount++; //更新recordCount
             return future;
         }
     }
@@ -97,7 +101,8 @@ public final class RecordBatch {
         for (int i = 0; i < this.thunks.size(); i++) {
             try {
                 Thunk thunk = this.thunks.get(i);
-                if (exception == null) {
+                if (exception == null) { //正常处理完成
+                    // 将服务返回的信息 （offset 和 timestamp）和消息的其他信息封装成 RecordMetadata
                     // If the timestamp returned by server is NoTimestamp, that means CreateTime is used. Otherwise LogAppendTime is used.
                     RecordMetadata metadata = new RecordMetadata(this.topicPartition,  baseOffset, thunk.future.relativeOffset(),
                                                                  timestamp == Record.NO_TIMESTAMP ? thunk.future.timestamp() : timestamp,
@@ -112,6 +117,7 @@ public final class RecordBatch {
                 log.error("Error executing user-provided callback on message for topic-partition {}:", topicPartition, e);
             }
         }
+        //标识整个RecordBatch都已经处理完成
         this.produceFuture.done(topicPartition, baseOffset, exception);
     }
 
@@ -152,6 +158,7 @@ public final class RecordBatch {
 
         if (expire) {
             this.records.close();
+            //超时
             this.done(-1L, Record.NO_TIMESTAMP, new TimeoutException("Batch containing " + recordCount + " record(s) expired due to timeout while requesting metadata from brokers for " + topicPartition));
         }
 

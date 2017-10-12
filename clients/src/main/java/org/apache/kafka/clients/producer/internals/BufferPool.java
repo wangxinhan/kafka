@@ -46,7 +46,7 @@ import org.apache.kafka.common.utils.Time;
 public final class BufferPool {
 
     private final long totalMemory; //记录了整个Pool的大小
-    private final int poolableSize;
+    private final int poolableSize; // 定义了特定大小的ByteBuffer,对于其他大小的ByteBuffer并不会存进来
     private final ReentrantLock lock; //因为有多线程并发分配和回收ByteBuffer，所以使用锁控制并发，保证线程安全。
     private final Deque<ByteBuffer> free; //缓存了指定大小的ByteBuffer对象
     private final Deque<Condition> waiters; //记录因申请不到足够空间而阻塞的线程，次队列中实际记录的是阻塞线程对应的Condition对象。
@@ -128,25 +128,27 @@ public final class BufferPool {
                 ByteBuffer buffer = null;
                 Condition moreMemory = this.lock.newCondition();
                 long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
-                this.waiters.addLast(moreMemory);
+                this.waiters.addLast(moreMemory);  //将Condition添加到waiters
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
-                while (accumulated < size) {
+                while (accumulated < size) { //循环等待
                     long startWaitNs = time.nanoseconds();
                     long timeNs;
                     boolean waitingTimeElapsed;
                     try {
                         waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
                     } catch (InterruptedException e) {
+                        // 异常，移除此线程对应的Condition
                         this.waiters.remove(moreMemory);
                         throw e;
                     } finally {
+                        // 统计堵塞时间
                         long endWaitNs = time.nanoseconds();
                         timeNs = Math.max(0L, endWaitNs - startWaitNs);
                         this.waitTime.record(timeNs, time.milliseconds());
                     }
 
-                    if (waitingTimeElapsed) {
+                    if (waitingTimeElapsed) { // 超时，报错
                         this.waiters.remove(moreMemory);
                         throw new TimeoutException("Failed to allocate memory within the configured max blocking time " + maxTimeToBlockMs + " ms.");
                     }
@@ -170,12 +172,14 @@ public final class BufferPool {
 
                 // remove the condition for this thread to let the next thread
                 // in line start getting memory
+                // 已成功分配到空间，移除Condition
                 Condition removed = this.waiters.removeFirst();
                 if (removed != moreMemory)
                     throw new IllegalStateException("Wrong condition: this shouldn't happen.");
 
                 // signal any additional waiters if there is more memory left
                 // over for them
+                // 要是还有空闲空间，就唤醒下一个线程
                 if (this.availableMemory > 0 || !this.free.isEmpty()) {
                     if (!this.waiters.isEmpty())
                         this.waiters.peekFirst().signal();
@@ -214,13 +218,16 @@ public final class BufferPool {
     public void deallocate(ByteBuffer buffer, int size) {
         lock.lock();
         try {
+            // 释放的ByteBuffer的大小是poolableSize，放入free队列中管理
             if (size == this.poolableSize && size == buffer.capacity()) {
                 buffer.clear();
                 this.free.add(buffer);
             } else {
+                // 释放的ByteBuffer大小不是poolableSize，不会复用ByteBuffer，仅修改availableMemory的值
                 this.availableMemory += size;
             }
             Condition moreMem = this.waiters.peekFirst();
+            //唤醒一个因空间不足而阻塞的线程
             if (moreMem != null)
                 moreMem.signal();
         } finally {

@@ -35,6 +35,11 @@ import org.apache.kafka.common.utils.Utils;
  */
 public class DefaultPartitioner implements Partitioner {
 
+
+    /**
+     * 初始化为一个随机数,使用AtomicInteger的原因是KafkaProucer是一个线程安全的类，可能有多个业务线程调用它来发送数据，
+     * 所以Partitioner也必须是线程安全的。
+     */
     private final AtomicInteger counter = new AtomicInteger(new Random().nextInt());
 
     /**
@@ -66,10 +71,14 @@ public class DefaultPartitioner implements Partitioner {
      * @param cluster The current cluster metadata
      */
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
+        //从cluster中获取对应的Topic的分区信息
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
+        //分区数量
         int numPartitions = partitions.size();
         if (keyBytes == null) {
+            //消息没有key的情况，递增counter
             int nextValue = counter.getAndIncrement();
+            // 选择availablePartitions
             List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
             if (availablePartitions.size() > 0) {
                 int part = DefaultPartitioner.toPositive(nextValue) % availablePartitions.size();

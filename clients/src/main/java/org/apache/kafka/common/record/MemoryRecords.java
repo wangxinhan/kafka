@@ -29,21 +29,27 @@ public class MemoryRecords implements Records {
 
     private final static int WRITE_LIMIT_FOR_READABLE_ONLY = -1;
 
-    // the compressor used for appends-only
+    /**
+     * 压缩器，对消息数据进行压缩，将压缩后的数据输出到buffer。
+     */
     private final Compressor compressor;
 
-    // the write limit for writable buffer, which may be smaller than the buffer capacity
+    /**
+     * 记录buffer字段最多可以写入多少个字节的数据
+     */
     private final int writeLimit;
 
     // the capacity of the initial buffer, which is only used for de-allocation of writable records
     private final int initialCapacity;
 
-    //保存消息数据
-    // the underlying buffer used for read; while the records are still writable it is null
+    /**
+     * 用来保存消息数据的 Java NIO ByteBuffer
+     */
     private ByteBuffer buffer;
 
-    //此MemoryRecords对象是只读模式，还是可写模式。
-    // indicate if the memory records is writable or not (i.e. used for appends or read-only)
+    /**
+     * 此MemoryRecords对象是只读模式，还是可写模式。在MemoryRecords发送前时，会将其设置成只读模式。
+     */
     private boolean writable;
 
     // Construct a writable memory records
@@ -115,6 +121,8 @@ public class MemoryRecords implements Records {
      * capacity will be the message size which is larger than the write limit, i.e. the batch size. In this case
      * the checking should be based on the capacity of the initialized buffer rather than the write limit in order
      * to accept this single record.
+     * 根据Compressor估算的已写的字节数，估计MemoryRecords剩余空间是否足够写入指定的数据。
+     * 注意，这里仅仅是估算，所以不一定准确，通过hasRoomFor()方法判断之后写入数据，也可能就会导致底层ByteBuffer出现扩容的情况。
      */
     public boolean hasRoomFor(byte[] key, byte[] value) {
         if (!this.writable)
@@ -138,6 +146,7 @@ public class MemoryRecords implements Records {
             compressor.close();
 
             // flip the underlying buffer to be ready for reads
+            // 将MemoryRecords.buffer指向扩容后的ByteBuffer对象。
             buffer = compressor.buffer();
             buffer.flip();
 
@@ -151,8 +160,10 @@ public class MemoryRecords implements Records {
      */
     public int sizeInBytes() {
         if (writable) {
+            //对于可写的MemoryRecords，返回的是ByteBufferOutputStream.buffer字段的大小
             return compressor.buffer().position();
         } else {
+            //对于只读的MemoryRecords，返回的是MemoryRecords。buffer的大小
             return buffer.limit();
         }
     }

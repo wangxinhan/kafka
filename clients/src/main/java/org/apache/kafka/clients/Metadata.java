@@ -32,20 +32,57 @@ import org.slf4j.LoggerFactory;
  * 
  * Metadata is maintained for only a subset of topics, which can be added to over time. When we request metadata for a
  * topic we don't have any metadata for it will trigger a metadata update.
+ * Metadata中字段可以有主线程读，Sender线程更新，因此它必须是线程安全的，所以它所有的方法都使用synchronize同步的原因。
  */
 public final class Metadata {
 
     private static final Logger log = LoggerFactory.getLogger(Metadata.class);
 
+    /**
+     * 两次发出更新Cluster保存的元数据信息的最小时间差，默认为100ms。
+     * 这是为了防止更新操作过于频繁而造成网络阻塞和增加服务端压力。
+     * 在Kafka中与重试操作有关的操作中，都有这种"退避时间"设计的身影。
+     */
     private final long refreshBackoffMs;
+    /**
+     * 每隔多久，更新一次。默认是 300 * 1000，也就是5分钟。
+     */
     private final long metadataExpireMs;
+    /**
+     * 表示Kafka集群元数据的版本号。Kafka集群元数据每更新成功一次，version字段的值增1.
+     * 通过新旧版本号的比较，判断集群元数据是否更新完成。
+     */
     private int version;
+    /**
+     * 记录上一次跟新元数据的时间戳（也包含更新失败的情况。）
+     */
     private long lastRefreshMs;
+    /**
+     *  上一次成功更新元数据的时间戳。如果每次都更新成功，则lastSuccessfulRefreshMs、lastRefreshMs相等。
+     *  否则，lastRefreshMs>lastSuccessfulRefreshMs
+     */
     private long lastSuccessfulRefreshMs;
+    /**
+     * 记录Kafka集群的元数据
+     */
     private Cluster cluster;
+    /**
+     * 标识是否强制更新Cluster，这是触发Sender线程更新集群元数据的条件之一。
+     */
     private boolean needUpdate;
+    /**
+     * 记录了当前已知的所有topic，在cluster字段中记录了Topic最新的元数据
+     */
     private final Set<String> topics;
+    /**
+     * 监听Metadata更新的监听集合器。
+     * 自定义Metadata监听实现Metadata.Listener.MetadataUpdate()方法即可，在更新Metadata中的cluster字段之前，会
+     * 通知listener集合中全部Listener对象
+     */
     private final List<Listener> listeners;
+    /**
+     * 是否需要更新全部Topic的元数据，一般情况下，KafkaProducer只维护它用到的Topic的元数据，是集群中全部Topic的子集。
+     */
     private boolean needMetadataForAllTopics;
 
     /**
@@ -101,6 +138,7 @@ public final class Metadata {
 
     /**
      * Request an update of the current cluster metadata info, return the current version before the update
+     * 将needUpdate字段修改为true，这样当Sender线程运行时会更新Metadata记录的集群元数据，然后返回version字段的值。
      */
     public synchronized int requestUpdate() {
         this.needUpdate = true;
@@ -117,6 +155,7 @@ public final class Metadata {
 
     /**
      * Wait for metadata update until the current version is larger than the last version we know of
+     * 主要通过版本号判断元数据是否更新完成，更新未完成则阻塞等待。
      */
     public synchronized void awaitUpdate(final int lastVersion, final long maxWaitMs) throws InterruptedException {
         if (maxWaitMs < 0) {

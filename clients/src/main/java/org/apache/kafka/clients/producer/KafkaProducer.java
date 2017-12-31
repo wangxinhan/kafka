@@ -129,26 +129,74 @@ import org.slf4j.LoggerFactory;
 public class KafkaProducer<K, V> implements Producer<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaProducer.class);
+    /**
+     * clientId生成器,如果没有明确指定client的Id,则使用字段生成一个ID。
+     */
     private static final AtomicInteger PRODUCER_CLIENT_ID_SEQUENCE = new AtomicInteger(1);
     private static final String JMX_PREFIX = "kafka.producer";
-
+    /**
+     * 此生产者的唯一标识。
+     */
     private String clientId;
+    /**
+     * 分区选择器，根据一定的策略，将消息路由到合适的分区。
+     */
     private final Partitioner partitioner;
+    /**
+     * 消息的最大长度，这个长度包含了消息头、序列化后的key和序列化后的value的长度。
+     */
     private final int maxRequestSize;
+    /**
+     * 发送单个消息的缓冲区大小。
+     */
     private final long totalMemorySize;
+    /**
+     * 整个kafka集群的元数据。
+     */
     private final Metadata metadata;
+    /**
+     * 用于收集并缓存消息，等待Sender线程发送。
+     */
     private final RecordAccumulator accumulator;
+    /**
+     * 发送消息的Sender任务，实现了Runnable接口，在ioThread线程中执行。
+     */
     private final Sender sender;
     private final Metrics metrics;
+    /**
+     * 执行Sender任务发送消息的线程，称为"Sender线程"。
+     */
     private final Thread ioThread;
+    /**
+     * 压缩算法，可选项有 none、gzip、snappy、lz4.这是针对RecordAccumulator中多条消息进行的压缩，所以消息越多，压缩效果越好。
+     */
     private final CompressionType compressionType;
     private final Sensor errors;
     private final Time time;
+    /**
+     * key的序列化器。
+     */
     private final Serializer<K> keySerializer;
+    /**
+     * value的序列化器。
+     */
     private final Serializer<V> valueSerializer;
+    /**
+     * 配置对象，使用反射初始化KafkaProducer配置的相对对象。
+     */
     private final ProducerConfig producerConfig;
+    /**
+     * 等待更新kafka集群元数据的最大时长。
+     */
     private final long maxBlockTimeMs;
+    /**
+     * 消息的超时时间，也就是从消息发送到收到ACK响应的最大时长。
+     */
     private final int requestTimeoutMs;
+    /**
+     * ProducerInterceptor集合，ProducerInterceptor可以再消息发送之前对其进行拦截或修改；
+     * 也可以先于用户的Callback,对ACK响应进行预处理。
+     */
     private final ProducerInterceptors<K, V> interceptors;
 
     /**
@@ -222,8 +270,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     MetricsReporter.class);
             reporters.add(new JmxReporter(JMX_PREFIX));
             this.metrics = new Metrics(metricConfig, reporters, time);
+            // 通过反射机制实例化配置的Partitioner类
             this.partitioner = config.getConfiguredInstance(ProducerConfig.PARTITIONER_CLASS_CONFIG, Partitioner.class);
             long retryBackoffMs = config.getLong(ProducerConfig.RETRY_BACKOFF_MS_CONFIG);
+            // 创建并更新Kafka集群的元数据
             this.metadata = new Metadata(retryBackoffMs, config.getLong(ProducerConfig.METADATA_MAX_AGE_CONFIG));
             this.maxRequestSize = config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG);
             this.totalMemorySize = config.getLong(ProducerConfig.BUFFER_MEMORY_CONFIG);
@@ -264,7 +314,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             } else {
                 this.requestTimeoutMs = config.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
             }
-
+            // 创建RecordAccumulator
             this.accumulator = new RecordAccumulator(config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
                     this.totalMemorySize,
                     this.compressionType,
@@ -275,6 +325,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             List<InetSocketAddress> addresses = ClientUtils.parseAndValidateAddresses(config.getList(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG));
             this.metadata.update(Cluster.bootstrap(addresses), time.milliseconds());
             ChannelBuilder channelBuilder = ClientUtils.createChannelBuilder(config.values());
+            //创建NetworkClient,这个是KafkaProducer网络I/O的核心
             NetworkClient client = new NetworkClient(
                     new Selector(config.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG), this.metrics, time, "producer", channelBuilder),
                     this.metadata,
@@ -284,6 +335,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     config.getInt(ProducerConfig.SEND_BUFFER_CONFIG),
                     config.getInt(ProducerConfig.RECEIVE_BUFFER_CONFIG),
                     this.requestTimeoutMs, time);
+            //启动Sender对应的线程
             this.sender = new Sender(client,
                     this.metadata,
                     this.accumulator,
@@ -513,6 +565,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      */
     private long waitOnMetadata(String topic, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already.
+        /**
+         * 检测Metadata中是否包含指定topic的元数据，若不包含，则将Topic添加到topics集合中，下次更新时
+         * 会从服务端获取指定Topic的元数据。
+         */
         if (!this.metadata.containsTopic(topic))
             this.metadata.add(topic);
 
@@ -523,8 +579,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         long remainingWaitMs = maxWaitMs;
         while (metadata.fetch().partitionsForTopic(topic) == null) {
             log.trace("Requesting metadata update for topic {}.", topic);
+            // 设置Metadata.needUpdate为true,并得到当前元数据版本号
             int version = metadata.requestUpdate();
+            //唤醒Sender线程，有Sender线程更新Metadata中保存的Kafka集群的元数据。
             sender.wakeup();
+            //主线程调用awaitUpdate()方法，等待Sender线程完成更新。
             metadata.awaitUpdate(version, remainingWaitMs);
             long elapsed = time.milliseconds() - begin;
             if (elapsed >= maxWaitMs)

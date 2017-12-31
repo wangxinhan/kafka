@@ -31,7 +31,11 @@ public final class ProduceRequestResult {
 
     private final CountDownLatch latch = new CountDownLatch(1);
     private volatile TopicPartition topicPartition;
-    private volatile long baseOffset = -1L; //服务器端为此RecordBatch中第一条消息分配的offset
+    /**
+     *  服务器端为此RecordBatch中第一条消息分配的offset
+     *  这样每个消息可以根据此offset以及自身在此RecordBatch中的相对偏移量，计算出其在服务器分区中的偏移量了。
+     */
+    private volatile long baseOffset = -1L;
     private volatile RuntimeException error;
 
     public ProduceRequestResult() {

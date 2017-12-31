@@ -14,6 +14,7 @@ package org.apache.kafka.clients.producer.internals;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Future;
 
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -33,19 +34,52 @@ public final class RecordBatch {
 
     private static final Logger log = LoggerFactory.getLogger(RecordBatch.class);
 
-    public int recordCount = 0; //记录了保存的Record的个数
-    public int maxRecordSize = 0; //最大的Record的字节数
-    public volatile int attempts = 0; //尝试发送当前RecordBatch的次数
+    /**
+     * 记录了保存的Record的个数
+     */
+    public int recordCount = 0;
+    /**
+     * 最大的Record的字节数
+     */
+    public int maxRecordSize = 0;
+    /**
+     * 尝试发送当前RecordBatch的次数
+     */
+    public volatile int attempts = 0;
     public final long createdMs;
     public long drainedMs;
-    public long lastAttemptMs; //最后一次尝试发送的时间戳
-    public final MemoryRecords records; //指定用来存储数据的MemoryRecords对象
-    public final TopicPartition topicPartition; //当前RecordBatch中缓存的消息都会发送给此TopicPartition
-    public final ProduceRequestResult produceFuture; //标识RecordBatch状态的Future对象
-    public long lastAppendTime; //最后一次向RecordBatch追加消息的时间戳
-    private final List<Thunk> thunks; // Thunk对象集合 消息的回调对象队列
-    private long offsetCounter = 0L; // 用来记录某消息在RecordBatch中的偏移量。
-    private boolean retry; //是否正在重试。
+    /**
+     * 最后一次尝试发送的时间戳
+     */
+    public long lastAttemptMs;
+    /**
+     * 指定用来存储数据的MemoryRecords对象,消息最终存放的地方
+     */
+    public final MemoryRecords records;
+    /**
+     * 当前RecordBatch中缓存的消息都会发送给此TopicPartition
+     */
+    public final TopicPartition topicPartition;
+    /**
+     * 标识RecordBatch状态的Future对象
+     */
+    public final ProduceRequestResult produceFuture;
+    /**
+     * 最后一次向RecordBatch追加消息的时间戳
+     */
+    public long lastAppendTime;
+    /**
+     * Thunk对象集合 消息的回调对象队列
+     */
+    private final List<Thunk> thunks;
+    /**
+     * 用来记录某消息在RecordBatch中的偏移量
+     */
+    private long offsetCounter = 0L;
+    /**
+     * 是否正在重试
+     */
+    private boolean retry;
 
     public RecordBatch(TopicPartition tp, MemoryRecords records, long now) {
         this.createdMs = now;

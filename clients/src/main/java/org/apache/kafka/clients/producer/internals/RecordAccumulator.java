@@ -68,11 +68,22 @@ public final class RecordAccumulator {
     private final long retryBackoffMs;
     private final BufferPool free;
     private final Time time;
-    private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches; //CopyOnWriteMap 线程安全 ArrayDeque非线程安全，加锁同步
-    private final IncompleteRecordBatches incomplete; //未完成发送的RecordBatch集合，通过 Set<RecordBatch> 集合实现
-    // The following variables are only accessed by the sender thread, so we don't need to protect them.
+    /**
+     * 类型CopyOnWriteMap 线程安全，ArrayDeque非线程安全，追加新消息或发送RecordBatch的时候，需要加锁同步
+     */
+    private final ConcurrentMap<TopicPartition, Deque<RecordBatch>> batches;
+    /**
+     * 未完成发送的RecordBatch集合，通过 Set<RecordBatch> 集合实现
+     */
+    private final IncompleteRecordBatches incomplete;
+    /**
+     * The following variables are only accessed by the sender thread, so we don't need to protect them.
+     */
     private final Set<TopicPartition> muted;
-    private int drainIndex; //使用drain方法批量导出RecordBatch时，为了防止饥饿，使用drainIndex记录上次发送停止的位置，下次继续从此位置发送。
+    /**
+     * 使用drain方法批量导出RecordBatch时，为了防止饥饿，使用drainIndex记录上次发送停止的位置，下次继续从此位置发送。
+     */
+    private int drainIndex;
 
     /**
      * Create a new record accumulator
@@ -88,7 +99,7 @@ public final class RecordAccumulator {
      * @param metrics The metrics
      * @param time The time instance to use
      */
-    public RecordAccumulator(int batchSize,
+    public RecordAccumulator(int batchSize, //参数指定的每个RecordBatch的大小，单位是字节
                              long totalSize,
                              CompressionType compression,
                              long lingerMs,

@@ -121,7 +121,9 @@ public class KafkaChannel {
     public void setSend(Send send) {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress.");
+        //设置send字段
         this.send = send;
+        //关注OP_WRITE事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
@@ -132,6 +134,11 @@ public class KafkaChannel {
             receive = new NetworkReceive(maxReceiveSize, id);
         }
 
+        /**
+         * receive()方法从transportLayer中读取数据到NetworkReceive对象中。假设并没有读完一个完整的NetworkReceive，则
+         * 下次触发OP_READ事件时继续填充此NetworkReceive对象，如果读取了一个完整的NetworkReceive对象，则将receive置空，
+         * 下次触发读取操作时，创建新NetworkReceive对象。
+         */
         receive(receive);
         if (receive.complete()) {
             receive.payload().rewind();
@@ -155,7 +162,10 @@ public class KafkaChannel {
     }
 
     private boolean send(Send send) throws IOException {
+        //如果send在一次write调用时没有发送完，SelectionKey的OP_WRITE事件没有取消，还会继续监听此Channel的OP_WRITE事件，直到整个
+        //send请求发送完毕才取消
         send.writeTo(transportLayer);
+        //判断发送是否完成是通过ByteBuffer中是否还有剩余字节来判断的
         if (send.completed())
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);
 

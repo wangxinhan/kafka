@@ -22,6 +22,7 @@ import java.util.Map;
 
 /**
  * The set of requests which have been sent or are being sent but haven't yet received a response
+ * InFlightRequests队列的主要作用是缓存了已经发出去但没有收到响应的ClientRequest
  */
 final class InFlightRequests {
 
@@ -80,6 +81,7 @@ final class InFlightRequests {
 
     /**
      * Can we send more requests to this node?
+     * NetworkClient调用此方法是用于判断是否可以向指定的Node发送请求的条件之一。
      * 
      * @param node Node in question
      * @return true iff we have no requests still being sent to the given node

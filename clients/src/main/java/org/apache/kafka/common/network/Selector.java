@@ -190,17 +190,26 @@ public class Selector implements Selectable {
         if (this.channels.containsKey(id))
             throw new IllegalStateException("There is already a connection for id " + id);
 
+        //创建SocketChannel
         SocketChannel socketChannel = SocketChannel.open();
+        //配置成非阻塞模式
         socketChannel.configureBlocking(false);
         Socket socket = socketChannel.socket();
+        //设置为长连接
         socket.setKeepAlive(true);
         if (sendBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
+            //设置SO_SNDBUF大小
             socket.setSendBufferSize(sendBufferSize);
         if (receiveBufferSize != Selectable.USE_DEFAULT_BUFFER_SIZE)
+            //设置 SO_RCVBUF大小
             socket.setReceiveBufferSize(receiveBufferSize);
         socket.setTcpNoDelay(true);
         boolean connected;
         try {
+            /**
+             * 因为是非阻塞方法，所以SocketChannel.connect()方法是发起一个连接，connect方法在连接正式建立之前
+             * 就可能返回，在后面会通过KSelector.finishConnect()方法确认连接是否真正建立了
+             */
             connected = socketChannel.connect(address);
         } catch (UnresolvedAddressException e) {
             socketChannel.close();
@@ -209,9 +218,13 @@ public class Selector implements Selectable {
             socketChannel.close();
             throw e;
         }
+        //将这个socketChannel注册到nioSelector上，并关注OP_CONNECT事件
         SelectionKey key = socketChannel.register(nioSelector, SelectionKey.OP_CONNECT);
+        //创建KafkaChannel
         KafkaChannel channel = channelBuilder.buildChannel(id, key, maxReceiveSize);
+        //将KafkaChannel注册到key上
         key.attach(channel);
+        //将NodeId和KafkaChannel绑定，放到channels中管理
         this.channels.put(id, channel);
 
         if (connected) {
@@ -262,6 +275,10 @@ public class Selector implements Selectable {
     /**
      * Queue the given request for sending in the subsequent {@link #poll(long)} calls
      * @param send The request to send
+     * 将之前创建的RequestSend对象缓存到KafkaChannel的send字段中，并开始关注此连接的OP_WRITE事件，并
+     * 没有发生网路I/O。在下次调用KSelector.poll()时，才会将RequestSend对象发送出去。如果此KafkaChannel的
+     * send字段上还保存着一个未完全发送成功的RequestSend请求，为防止覆盖，则会抛出异常。也就是说，每个KafkaChannel
+     * 一次poll过程中只能发送一个Send请求。
      */
     public void send(Send send) {
         KafkaChannel channel = channelOrFail(send.destination());
@@ -297,12 +314,15 @@ public class Selector implements Selectable {
      * @throws IllegalArgumentException If `timeout` is negative
      * @throws IllegalStateException If a send is given for which we have no existing connection or for which there is
      *         already an in-progress send
+     *
+     *  真正执行网络I/O的地方，他会调用nioSelectot.select()方法等待I/O事件发生。
      */
     @Override
     public void poll(long timeout) throws IOException {
         if (timeout < 0)
             throw new IllegalArgumentException("timeout should be >= 0");
 
+        //将上一次poll()方法的结果全部清除掉
         clear();
 
         if (hasStagedReceives() || !immediatelyConnectedKeys.isEmpty())
@@ -310,6 +330,7 @@ public class Selector implements Selectable {
 
         /* check ready keys */
         long startSelect = time.nanoseconds();
+        // 调用nioSelector.select()方法，等待I/O事件发生
         int readyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         currentTimeNanos = endSelect;
@@ -320,50 +341,76 @@ public class Selector implements Selectable {
             pollSelectionKeys(immediatelyConnectedKeys, true);
         }
 
+        //将stagedReceives复制到completedReceives集合中
         addToCompletedReceives();
 
         long endIo = time.nanoseconds();
         this.sensors.ioTime.record(endIo - endSelect, time.milliseconds());
+        //关闭长期空闲的连接
         maybeCloseOldestConnection();
     }
 
+    /**
+     * 处理I/O操作的核心方法，其中会分别处理OP_CONNECT、OP_READ、OP_WRITE事件，并会检测连接状态
+     * @param selectionKeys
+     * @param isImmediatelyConnected
+     */
     private void pollSelectionKeys(Iterable<SelectionKey> selectionKeys, boolean isImmediatelyConnected) {
         Iterator<SelectionKey> iterator = selectionKeys.iterator();
         while (iterator.hasNext()) {
             SelectionKey key = iterator.next();
             iterator.remove();
+            //之前创建连接时，将KafkaChannel注册到key上，就是为了在这里获取
             KafkaChannel channel = channel(key);
 
             // register all per-connection metrics at once
             sensors.maybeRegisterConnectionMetrics(channel.id());
+            //更新lru信息
             lruConnections.put(channel.id(), currentTimeNanos);
 
             try {
 
                 /* complete any connections that have finished their handshake (either normally or immediately) */
+                // 对connect方法返回true或OP_CONNECION事件的处理
                 if (isImmediatelyConnected || key.isConnectable()) {
+                    // finishConnect方法会先检测socketChannel是否建立完成，建立后，会取消对OP_CONNECT事件关注，开始关注OP_READ事件
                     if (channel.finishConnect()) {
+                        //添加到"已连接"的集合中。
                         this.connected.add(channel.id());
                         this.sensors.connectionCreated.record();
                     } else
+                        //连接未完成，则跳过对此Channel的后续处理
                         continue;
                 }
 
                 /* if channel is not ready finish prepare */
+                //调用KafkaChannel.prepare()方法进行身份验证
                 if (channel.isConnected() && !channel.ready())
                     channel.prepare();
 
                 /* if channel is ready read from any connections that have readable data */
+                //OP_READ事件处理
                 if (channel.ready() && key.isReadable() && !hasStagedReceive(channel)) {
                     NetworkReceive networkReceive;
                     while ((networkReceive = channel.read()) != null)
+                        /**
+                         * 上面channel.read()读取到一个完整的NetworkReceive，则将其添加到stagedReceives中保存
+                         * 若读取不到一个完整的NetworkReceive,则返回null,下次处理OP_READ事件时，继续读取，直到
+                         * 读取到一个完整的NetworkReceive
+                         */
                         addToStagedReceives(channel, networkReceive);
                 }
 
                 /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
+                //OP_WRITE事件处理
                 if (channel.ready() && key.isWritable()) {
                     Send send = channel.write();
+                    /**
+                     * 上面的channel.write()方法将KakfaChannel.send字段发送出去，如果未完成发送，则返回null,如果发送完成，
+                     * 则返回send,并添加到completedSends集合中，待后续处理
+                     */
                     if (send != null) {
+                        //添加到completedSends集合
                         this.completedSends.add(send);
                         this.sensors.recordBytesSent(channel.id(), send.size());
                     }
@@ -381,6 +428,7 @@ public class Selector implements Selectable {
                     log.debug("Connection with {} disconnected", desc, e);
                 else
                     log.warn("Unexpected error from {}; closing connection", desc, e);
+                //抛出异常，则认为连接关闭，将对应NodeId添加到disconnected集合
                 close(channel);
                 this.disconnected.add(channel.id());
             }

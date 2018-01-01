@@ -510,13 +510,17 @@ public class NetworkClient implements KafkaClient {
 
     class DefaultMetadataUpdater implements MetadataUpdater {
 
-        /* the current cluster metadata */
+        /**
+         * 记录了集群元数据的Metadata对象
+         */
         private final Metadata metadata;
-
-        /* true iff there is a metadata request that has been sent and for which we have not yet received a response */
+        /**
+         * 用来标识是否已经发送了MetadataRequest请求更新Metadata,如果已经发送，则没必要重复发送。
+         */
         private boolean metadataFetchInProgress;
-
-        /* the last timestamp when no broker node is available to connect */
+        /**
+         * 当检测到没有可用节点时，会用此字段记录时间戳
+         */
         private long lastNoNodeAvailableMs;
 
         DefaultMetadataUpdater(Metadata metadata) {
@@ -538,17 +542,25 @@ public class NetworkClient implements KafkaClient {
         @Override
         public long maybeUpdate(long now) {
             // should we update our metadata?
+            /**
+             * 调用Metadata.timeToNextUpdate()方法，其中会检测needUpdate的值、退避时间，
+             * 是否长时间未更新，最终得到一个下次更新集群元数据的时间戳
+             */
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
+            //获取下次重试重新连接服务端的时间戳
             long timeToNextReconnectAttempt = Math.max(this.lastNoNodeAvailableMs + metadata.refreshBackoff() - now, 0);
+            //检测是否已经发送了MetadataRequest请求
             long waitForMetadataFetch = this.metadataFetchInProgress ? Integer.MAX_VALUE : 0;
-            // if there is no node available to connect, back off refreshing metadata
+            //计算当前距离下次可以发送MetadataRequest请求的时间差
             long metadataTimeout = Math.max(Math.max(timeToNextMetadataUpdate, timeToNextReconnectAttempt),
                     waitForMetadataFetch);
 
             if (metadataTimeout == 0) {
                 // Beware that the behavior of this method and the computation of timeouts for poll() are
                 // highly dependent on the behavior of leastLoadedNode.
+                //找到负载最小的Node，若没有可用Node，则返回null
                 Node node = leastLoadedNode(now);
+                //创建并缓存MetadataRequest，等待下次poll()方法才会真正发送
                 maybeUpdate(now, node);
             }
 
@@ -578,6 +590,7 @@ public class NetworkClient implements KafkaClient {
         @Override
         public boolean maybeHandleCompletedReceive(ClientRequest req, long now, Struct body) {
             short apiKey = req.request().header().apiKey();
+            //检测是否为MetadataRequest请求
             if (apiKey == ApiKeys.METADATA.id && req.isInitiatedByNetworkClient()) {
                 handleResponse(req.request().header(), body, now);
                 return true;
@@ -591,8 +604,10 @@ public class NetworkClient implements KafkaClient {
         }
 
         private void handleResponse(RequestHeader header, Struct body, long now) {
+            //修改metadataFetchInProgress
             this.metadataFetchInProgress = false;
             MetadataResponse response = new MetadataResponse(body);
+            //创建Cluster对象
             Cluster cluster = response.cluster();
             // check if any topics metadata failed to get updated
             Map<String, Errors> errors = response.errors();
@@ -602,9 +617,11 @@ public class NetworkClient implements KafkaClient {
             // don't update the cluster if there are no valid nodes...the topic we want may still be in the process of being
             // created which means we will get errors and no nodes until it exists
             if (cluster.nodes().size() > 0) {
+                //在Metadata.update()方法中，首先通知Metadata上的监听器，之后更新cluster字段，最后唤醒等待Metadata更新完成的线程
                 this.metadata.update(cluster, now);
             } else {
                 log.trace("Ignoring empty metadata response with correlation id {}.", header.correlationId());
+                //更新Metadat失败，只是更新lastRefreshMs字段
                 this.metadata.failedUpdate(now);
             }
         }
@@ -621,9 +638,11 @@ public class NetworkClient implements KafkaClient {
          * Add a metadata request to the list of sends if we can make one
          */
         private void maybeUpdate(long now, Node node) {
+            //检测是否有Node可用
             if (node == null) {
                 log.debug("Give up sending metadata request since no node is available");
                 // mark the timestamp for no node available to connect
+                //设置lastNoNodeAvailableMs
                 this.lastNoNodeAvailableMs = now;
                 return;
             }
@@ -632,16 +651,20 @@ public class NetworkClient implements KafkaClient {
             if (canSendRequest(nodeConnectionId)) {
                 this.metadataFetchInProgress = true;
                 MetadataRequest metadataRequest;
+                //指定需要更新元数据的Topic
                 if (metadata.needMetadataForAllTopics())
                     metadataRequest = MetadataRequest.allTopics();
                 else
                     metadataRequest = new MetadataRequest(new ArrayList<>(metadata.topics()));
+                //将MetadataRequest封装成ClientRequest
                 ClientRequest clientRequest = request(now, nodeConnectionId, metadataRequest);
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node.id());
+                //缓存请求，在下次poll()操作中会将其发送出去
                 doSend(clientRequest, now);
             } else if (connectionStates.canConnect(nodeConnectionId, now)) {
                 // we don't have a connection to this node right now, make one
                 log.debug("Initialize connection to node {} for sending metadata request", node.id());
+                //初始化连接
                 initiateConnect(node, now);
                 // If initiateConnect failed immediately, this node will be put into blackout and we
                 // should allow immediately retrying in case there is another candidate node. If it
@@ -650,6 +673,7 @@ public class NetworkClient implements KafkaClient {
             } else { // connected, but can't send more OR connecting
                 // In either case, we just need to wait for a network event to let us know the selected
                 // connection might be usable again.
+                //已成功连接到指定节点，但不能发送请求，则更新lastNoNodeAvailableMs后等待
                 this.lastNoNodeAvailableMs = now;
             }
         }

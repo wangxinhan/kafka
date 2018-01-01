@@ -159,7 +159,10 @@ public final class RecordBatch {
      * A callback and the associated FutureRecordMetadata argument to pass to it.
      */
     final private static class Thunk {
-        final Callback callback; //对象消息的Callback对象
+        /**
+         * 对象消息的Callback对象
+         */
+        final Callback callback;
         final FutureRecordMetadata future;
 
         public Thunk(Callback callback, FutureRecordMetadata future) {

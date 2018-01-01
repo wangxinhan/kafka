@@ -79,20 +79,54 @@ public class Selector implements Selectable {
 
     private static final Logger log = LoggerFactory.getLogger(Selector.class);
 
+
+    /**
+     * 用来监听网络I/O事件
+     */
     private final java.nio.channels.Selector nioSelector;
+    /**
+     * 维护了NodeId与KafkaChannel之间的映射关系，表示生产者客户端与各个Node之间的网络连接
+     * KafkaChannel是在SocketChannel上的又一层封装
+     */
     private final Map<String, KafkaChannel> channels;
+    /**
+     * 记录已经发送出去的请求
+     */
     private final List<Send> completedSends;
+    /**
+     * 记录已经接收到的请求
+     */
     private final List<NetworkReceive> completedReceives;
+    /**
+     * 暂存一次OP_READ事件处理过程中读取到的全部请求。当一次OP_READ事件处理完成之后，
+     * 会将stagedReceives集合中的请求保存到completedReceives集合中。
+     */
     private final Map<KafkaChannel, Deque<NetworkReceive>> stagedReceives;
     private final Set<SelectionKey> immediatelyConnectedKeys;
+    /**
+     * 记录一次poll过程中发现的断开的连接
+     */
     private final List<String> disconnected;
+    /**
+     * 记录一次poll过程中新建立的连接
+     */
     private final List<String> connected;
+    /**
+     * 记录向哪些Node发送的请求失败了
+     */
     private final List<String> failedSends;
     private final Time time;
     private final SelectorMetrics sensors;
     private final String metricGrpPrefix;
     private final Map<String, String> metricTags;
+    /**
+     * 用于创建KafkaChannel的Builder。根据不同的配置创建不同的TransportLayer的子类，
+     * 然后创建KafkaChannel。
+     */
     private final ChannelBuilder channelBuilder;
+    /**
+     * LinkedHashMap类型，用于记录各个连接的使用情况，并据此关闭空闲时间超过connectionsMaxIdleNanos的连接。
+     */
     private final Map<String, Long> lruConnections;
     private final long connectionsMaxIdleNanos;
     private final int maxReceiveSize;
@@ -148,6 +182,8 @@ public class Selector implements Selectable {
      * @param receiveBufferSize The receive buffer for the new connection
      * @throws IllegalStateException if there is already a connection for that id
      * @throws IOException if DNS resolution fails on the hostname or if the broker is down
+     *
+     * 主要负责创建KafkaChannel，并添加到channels集合中保存。
      */
     @Override
     public void connect(String id, InetSocketAddress address, int sendBufferSize, int receiveBufferSize) throws IOException {

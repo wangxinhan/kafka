@@ -44,13 +44,30 @@ import org.apache.kafka.common.utils.Time;
  *  ByteBuffer的创建和释放是比较消耗资源的，为了实现内存的高效利用，kafka客户端使用BufferPool来实现ByteBuffer的复用。
  */
 public final class BufferPool {
-
-    private final long totalMemory; //记录了整个Pool的大小
-    private final int poolableSize; // 定义了特定大小的ByteBuffer,对于其他大小的ByteBuffer并不会存进来
-    private final ReentrantLock lock; //因为有多线程并发分配和回收ByteBuffer，所以使用锁控制并发，保证线程安全。
-    private final Deque<ByteBuffer> free; //缓存了指定大小的ByteBuffer对象
-    private final Deque<Condition> waiters; //记录因申请不到足够空间而阻塞的线程，次队列中实际记录的是阻塞线程对应的Condition对象。
-    private long availableMemory; //记录了可用的空间大小，这个空间是 totalMemory - free列表中全部ByteBuffer的大小
+    /**
+     * 记录了整个Pool的大小
+     */
+    private final long totalMemory;
+    /**
+     * 定义了特定大小的ByteBuffer,对于其他大小的ByteBuffer并不会存进来
+     */
+    private final int poolableSize;
+    /**
+     * 因为有多线程并发分配和回收ByteBuffer，所以使用锁控制并发，保证线程安全。
+     */
+    private final ReentrantLock lock;
+    /**
+     * 缓存了指定大小的ByteBuffer对象
+     */
+    private final Deque<ByteBuffer> free;
+    /**
+     * 记录因申请不到足够空间而阻塞的线程，次队列中实际记录的是阻塞线程对应的Condition对象。
+     */
+    private final Deque<Condition> waiters;
+    /**
+     * 记录了可用的空间大小，这个空间是 totalMemory - free列表中全部ByteBuffer的大小
+     */
+    private long availableMemory;
     private final Metrics metrics;
     private final Time time;
     private final Sensor waitTime;
@@ -103,20 +120,16 @@ public final class BufferPool {
         this.lock.lock(); //加锁同步
         try {
             // 请求的是poolableSize指定大小的ByteBuffer，且free中有空闲的ByteBuffer
-            // check if we have a free buffer of the right size pooled
             if (size == poolableSize && !this.free.isEmpty())
-                return this.free.pollFirst(); //返回适合的ByteBuffer
+                //返回适合的ByteBuffer
+                return this.free.pollFirst();
 
-            // now check if the request is immediately satisfiable with the
-            // memory on hand or if we need to block
             // 当申请的空间大小不是poolableSize，则执行下面的处理
             // free队列中都是poolableSize大小的ByteBuffer，可以直接计算整个free队列的空间
             int freeListSize = this.free.size() * this.poolableSize;
             if (this.availableMemory + freeListSize >= size) {
-                // we have enough unallocated or pooled memory to immediately
-                // satisfy the request
-                // 为了让 availableMemory > size freeUp() 方法会从free队列中不断释放
-                // ByttBuffer,直到availableMemory 满足这次申请
+                // 为了让 availableMemory > size freeUp() 方法会从free队列中不断释放ByttBuffer,
+                // 直到availableMemory 满足这次申请
                 freeUp(size);
                 this.availableMemory -= size; //减小availableMemory
                 lock.unlock(); //解锁
@@ -154,15 +167,13 @@ public final class BufferPool {
                     }
 
                     remainingTimeToBlockNs -= timeNs;
-                    // check if we can satisfy this request from the free list,
-                    // otherwise allocate memory
+                    // 请求的是poolableSize大小的ByteBuffer，且free中有空闲的ByteBuffer
                     if (accumulated == 0 && size == this.poolableSize && !this.free.isEmpty()) {
                         // just grab a buffer from the free list
                         buffer = this.free.pollFirst();
                         accumulated = size;
                     } else {
-                        // we'll need to allocate memory, but we may only get
-                        // part of what we need on this iteration
+                        //先分配一部分空间，并继续等待空闲空间
                         freeUp(size - accumulated);
                         int got = (int) Math.min(size - accumulated, this.availableMemory);
                         this.availableMemory -= got;
@@ -170,15 +181,11 @@ public final class BufferPool {
                     }
                 }
 
-                // remove the condition for this thread to let the next thread
-                // in line start getting memory
                 // 已成功分配到空间，移除Condition
                 Condition removed = this.waiters.removeFirst();
                 if (removed != moreMemory)
                     throw new IllegalStateException("Wrong condition: this shouldn't happen.");
 
-                // signal any additional waiters if there is more memory left
-                // over for them
                 // 要是还有空闲空间，就唤醒下一个线程
                 if (this.availableMemory > 0 || !this.free.isEmpty()) {
                     if (!this.waiters.isEmpty())

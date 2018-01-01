@@ -24,8 +24,14 @@ import org.apache.kafka.clients.producer.RecordMetadata;
  */
 public final class FutureRecordMetadata implements Future<RecordMetadata> {
 
-    private final ProduceRequestResult result; // 指向对应消息所在RecordBatch的produceFuture字段
-    private final long relativeOffset; // 记录了对应消息在RecordBatch中的偏移量
+    /**
+     * 指向对应消息所在RecordBatch的produceFuture字段
+     */
+    private final ProduceRequestResult result;
+    /**
+     * 记录了对应消息在RecordBatch中的偏移量
+     */
+    private final long relativeOffset;
     private final long timestamp;
     private final long checksum;
     private final int serializedKeySize;

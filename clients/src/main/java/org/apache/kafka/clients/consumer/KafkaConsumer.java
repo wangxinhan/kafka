@@ -501,20 +501,46 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaConsumer.class);
     private static final long NO_CURRENT_THREAD = -1L;
+    /**
+     * clientId生成器，如果没有明确指定client的Id，则使用字段生成一个ID.
+     */
     private static final AtomicInteger CONSUMER_CLIENT_ID_SEQUENCE = new AtomicInteger(1);
     private static final String JMX_PREFIX = "kafka.consumer";
 
+    /**
+     * Consumer的唯一标识
+     */
     private final String clientId;
+    /**
+     * 控制Consumer与服务器端GroupCoordinator之间的通信逻辑
+     */
     private final ConsumerCoordinator coordinator;
     private final Deserializer<K> keyDeserializer;
     private final Deserializer<V> valueDeserializer;
+    /**
+     * 负责从服务器端获取消息
+     */
     private final Fetcher<K, V> fetcher;
+    /**
+     * ConsumerInterceptors集合，ConsumerInterceptor.onConsumer()方法可以在消息通过poll()方法返回用户
+     * 之前对其进行拦截或修改；ConsumerInterceptor.onCommit()方法也可以在服务端返回提交offset成功的响应时
+     * 对其进行拦截或修改。
+     */
     private final ConsumerInterceptors<K, V> interceptors;
 
     private final Time time;
+    /**
+     * 负责消费者与Kafka服务端的网络通信
+     */
     private final ConsumerNetworkClient client;
     private final Metrics metrics;
+    /**
+     * 维护了消费者的消费状态
+     */
     private final SubscriptionState subscriptions;
+    /**
+     * 记录了整个Kafka集群的元信息。
+     */
     private final Metadata metadata;
     private final long retryBackoffMs;
     private final long requestTimeoutMs;
@@ -522,7 +548,13 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     // currentThread holds the threadId of the current thread accessing KafkaConsumer
     // and is used to prevent multi-threaded access
+    /**
+     * 记录了当前使用KafkaConsumer的线程Id
+     */
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
+    /**
+     * 记录了当前使用KafkaConsumer的线程冲入次数
+     */
     // refcount is used to allow reentrant access by the thread who has acquired currentThread
     private final AtomicInteger refcount = new AtomicInteger(0);
 

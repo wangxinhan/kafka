@@ -268,6 +268,7 @@ public class Sender implements Runnable {
      */
     private void handleProduceResponse(ClientResponse response, Map<TopicPartition, RecordBatch> batches, long now) {
         int correlationId = response.request().request().header().correlationId();
+        //对于连接断开而产生的ClientResponse，会重试发送请求，若不能重试，则调用其中每条消息的回调。
         if (response.wasDisconnected()) {
             log.trace("Cancelled request {} due to node {} being disconnected", response, response.request()
                                                                                                   .request()
@@ -286,12 +287,14 @@ public class Sender implements Runnable {
                     ProduceResponse.PartitionResponse partResp = entry.getValue();
                     Errors error = Errors.forCode(partResp.errorCode);
                     RecordBatch batch = batches.get(tp);
+                    //调用completeBatch()方法处理
                     completeBatch(batch, error, partResp.baseOffset, partResp.timestamp, correlationId, now);
                 }
                 this.sensors.recordLatency(response.request().request().destination(), response.requestLatencyMs());
                 this.sensors.recordThrottleTime(response.request().request().destination(),
                                                 produceResponse.getThrottleTime());
             } else {
+                //不需要响应的请求，直接调用completeBatch()方法处理
                 // this is the acks = 0 case, just complete all requests
                 for (RecordBatch batch : batches.values())
                     completeBatch(batch, Errors.NONE, -1L, Record.NO_TIMESTAMP, correlationId, now);
@@ -317,17 +320,22 @@ public class Sender implements Runnable {
                      batch.topicPartition,
                      this.retries - batch.attempts - 1,
                      error);
+            //对于可重试的RecordBatch，则重新添加到RecordAccumulator中，等待发送
             this.accumulator.reenqueue(batch, now);
             this.sensors.recordRetries(batch.topicPartition.topic(), batch.recordCount);
         } else {
+            //不能重试的话，会将RecordBatch都标记为"异常完成",并释放RecordBatch
             RuntimeException exception;
+            //获取异常
             if (error == Errors.TOPIC_AUTHORIZATION_FAILED)
                 exception = new TopicAuthorizationException(batch.topicPartition.topic());
             else
                 exception = error.exception();
             // tell the user the result of their request
             // 收到服务端发送回的正常响应
+            // 调用RecorBatch.done()方法，调用消息的回调函数
             batch.done(baseOffset, timestamp, exception);
+            //释放空间
             this.accumulator.deallocate(batch);
             if (error != Errors.NONE)
                 this.sensors.recordErrors(batch.topicPartition.topic(), batch.recordCount);
@@ -381,7 +389,7 @@ public class Sender implements Runnable {
                 handleProduceResponse(response, recordsByPartition, time.milliseconds());
             }
         };
-        //创建ClientRequest对象，注意其第二个参数，根据acks配置决定请求是否需要获取响应。
+        //创建ClientReque
         return new ClientRequest(now, acks != 0, send, callback);
     }
 
